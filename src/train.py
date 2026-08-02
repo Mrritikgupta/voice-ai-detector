@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import numpy as np
+import time
 
 import sys
 from pathlib import Path
@@ -30,11 +31,14 @@ def run_epoch(loader, net, optimizer, criterion, train_mode):
     total_loss = 0
     correct = 0
     total = 0
+    num_batches = len(loader)
 
     context = torch.enable_grad() if train_mode else torch.no_grad()
 
+    start_time = time.time()
+
     with context:
-        for audio_batch, labels in loader:
+        for batch_idx, (audio_batch, labels) in enumerate(loader):
             labels = labels.to(device)
             audio_np = audio_batch.numpy()
 
@@ -55,6 +59,13 @@ def run_epoch(loader, net, optimizer, criterion, train_mode):
             correct += (preds == labels).sum().item()
             total += len(labels)
 
+            if batch_idx % 20 == 0:
+                elapsed = time.time() - start_time
+                mode_str = "Train" if train_mode else "Val"
+                print(f"  [{mode_str}] Batch {batch_idx}/{num_batches} | "
+                      f"Loss so far: {total_loss/total:.4f} | "
+                      f"Elapsed: {elapsed/60:.1f} min")
+
     avg_loss = total_loss / total
     accuracy = correct / total
     return avg_loss, accuracy
@@ -70,8 +81,14 @@ def main():
     train_ds = dataset.VoiceDataset(train_csv, use_augment=True)
     val_ds = dataset.VoiceDataset(val_csv, use_augment=False)
 
-    train_loader = DataLoader(train_ds, batch_size=config.BATCH_SIZE, shuffle=True, collate_fn=dataset.collate_fn)
-    val_loader = DataLoader(val_ds, batch_size=config.BATCH_SIZE, shuffle=False, collate_fn=dataset.collate_fn)
+    train_loader = DataLoader(
+        train_ds, batch_size=config.BATCH_SIZE, shuffle=True,
+        collate_fn=dataset.collate_fn, num_workers=4, persistent_workers=True
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=config.BATCH_SIZE, shuffle=False,
+        collate_fn=dataset.collate_fn, num_workers=4, persistent_workers=True
+    )
 
     net = model_module.build_model(device)
 
@@ -82,10 +99,11 @@ def main():
     best_val_loss = float("inf")
 
     for epoch in range(config.NUM_EPOCHS):
+        print(f"\n=== Epoch {epoch+1}/{config.NUM_EPOCHS} ===")
         train_loss, train_acc = run_epoch(train_loader, net, optimizer, criterion, train_mode=True)
         val_loss, val_acc = run_epoch(val_loader, net, optimizer, criterion, train_mode=False)
 
-        print(f"Epoch {epoch+1}/{config.NUM_EPOCHS} | "
+        print(f"Epoch {epoch+1}/{config.NUM_EPOCHS} DONE | "
               f"Train Loss: {train_loss:.4f} Acc: {train_acc:.4f} | "
               f"Val Loss: {val_loss:.4f} Acc: {val_acc:.4f}")
 
