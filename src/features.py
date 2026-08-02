@@ -42,11 +42,23 @@ def extract_embedding(audio_chunk):
     return embedding.cpu().numpy()
 
 
-def extract_embeddings_batch(audio_chunks):
-    embeddings = []
-    for chunk in audio_chunks:
-        embeddings.append(extract_embedding(chunk))
-    return np.stack(embeddings)
+def extract_embeddings_batch(audio_batch):
+    feature_extractor, model = load_model()
+
+    inputs = feature_extractor(
+        list(audio_batch),
+        sampling_rate=config.SAMPLE_RATE,
+        return_tensors="pt",
+        padding=True
+    )
+    input_values = inputs.input_values.to(_device)
+
+    with torch.no_grad():
+        outputs = model(input_values)
+        hidden_states = outputs.last_hidden_state
+
+    embeddings = hidden_states.mean(dim=1)
+    return embeddings
 
 
 if __name__ == "__main__":

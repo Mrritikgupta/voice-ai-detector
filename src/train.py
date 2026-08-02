@@ -1,0 +1,101 @@
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+import numpy as np
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import config
+import dataset
+import model as model_module
+import features
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def compute_pos_weight(train_csv):
+    import pandas as pd
+    df = pd.read_csv(train_csv)
+    num_real = (df["label"] == config.LABEL_REAL).sum()
+    num_fake = (df["label"] == config.LABEL_FAKE).sum()
+    pos_weight = num_real / num_fake
+    print(f"Real: {num_real}, Fake: {num_fake}, pos_weight: {pos_weight:.4f}")
+    return torch.tensor(pos_weight, dtype=torch.float32)
+
+
+def run_epoch(loader, net, optimizer, criterion, train_mode):
+    net.train() if train_mode else net.eval()
+
+    total_loss = 0
+    correct = 0
+    total = 0
+
+    context = torch.enable_grad() if train_mode else torch.no_grad()
+
+    with context:
+        for audio_batch, labels in loader:
+            labels = labels.to(device)
+            audio_np = audio_batch.numpy()
+
+            embeddings = features.extract_embeddings_batch(audio_np)
+
+            if train_mode:
+                optimizer.zero_grad()
+
+            logits = net(embeddings).squeeze(1)
+            loss = criterion(logits, labels)
+
+            if train_mode:
+                loss.backward()
+                optimizer.step()
+
+            total_loss += loss.item() * len(labels)
+            preds = (torch.sigmoid(logits) > 0.5).float()
+            correct += (preds == labels).sum().item()
+            total += len(labels)
+
+    avg_loss = total_loss / total
+    accuracy = correct / total
+    return avg_loss, accuracy
+
+
+def main():
+    torch.manual_seed(config.RANDOM_SEED)
+    np.random.seed(config.RANDOM_SEED)
+
+    train_csv = config.SPLITS_DIR / "train.csv"
+    val_csv = config.SPLITS_DIR / "val.csv"
+
+    train_ds = dataset.VoiceDataset(train_csv, use_augment=True)
+    val_ds = dataset.VoiceDataset(val_csv, use_augment=False)
+
+    train_loader = DataLoader(train_ds, batch_size=config.BATCH_SIZE, shuffle=True, collate_fn=dataset.collate_fn)
+    val_loader = DataLoader(val_ds, batch_size=config.BATCH_SIZE, shuffle=False, collate_fn=dataset.collate_fn)
+
+    net = model_module.build_model(device)
+
+    pos_weight = compute_pos_weight(train_csv).to(device)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    optimizer = torch.optim.Adam(net.parameters(), lr=config.LEARNING_RATE)
+
+    best_val_loss = float("inf")
+
+    for epoch in range(config.NUM_EPOCHS):
+        train_loss, train_acc = run_epoch(train_loader, net, optimizer, criterion, train_mode=True)
+        val_loss, val_acc = run_epoch(val_loader, net, optimizer, criterion, train_mode=False)
+
+        print(f"Epoch {epoch+1}/{config.NUM_EPOCHS} | "
+              f"Train Loss: {train_loss:.4f} Acc: {train_acc:.4f} | "
+              f"Val Loss: {val_loss:.4f} Acc: {val_acc:.4f}")
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            model_module.save_model(net)
+            print(f"  Saved new best model (val_loss={val_loss:.4f})")
+
+    print("Training complete.")
+
+
+if __name__ == "__main__":
+    main()
