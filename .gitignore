@@ -7,3 +7,4 @@ data/processed/
 data/raw_downloads/
 data/splits/
 models/*.pt
+.env
