@@ -84,8 +84,35 @@ def simulate_telephone(audio, sr=None):
     return result
 
 
+def simulate_replay(audio, sr=None):
+    if sr is None:
+        sr = config.SAMPLE_RATE
+
+    with tempfile.TemporaryDirectory() as tmp:
+        wav_path = os.path.join(tmp, "in.wav")
+        out_wav = os.path.join(tmp, "out.wav")
+
+        sf.write(wav_path, audio, sr)
+
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", wav_path, "-af",
+             "aecho=0.6:0.4:40:0.3,lowpass=f=7000,highpass=f=80",
+             out_wav],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+
+        result, _ = sf.read(out_wav)
+
+    if len(result) < len(audio):
+        result = np.pad(result, (0, len(audio) - len(result)))
+    else:
+        result = result[:len(audio)]
+
+    return result
+
+
 def random_augment(audio):
-    choice = random.choice(["none", "noise", "volume", "shift", "mp3", "telephone"])
+    choice = random.choice(["none", "noise", "volume", "shift", "mp3", "telephone", "replay"])
 
     if choice == "noise":
         return add_noise(audio)
@@ -97,6 +124,8 @@ def random_augment(audio):
         return simulate_mp3(audio)
     elif choice == "telephone":
         return simulate_telephone(audio)
+    elif choice == "replay":
+        return simulate_replay(audio)
     else:
         return audio
 
