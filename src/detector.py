@@ -10,7 +10,7 @@ import features
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-DECISION_THRESHOLD = 0.3494
+DECISION_THRESHOLD = 0.5340
 
 _net = None
 
