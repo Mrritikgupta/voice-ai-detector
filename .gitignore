@@ -6,5 +6,7 @@ data/raw/
 data/processed/
 data/raw_downloads/
 data/splits/
+data/manifests/*.csv
 models/*.pt
+*.zip
 .env

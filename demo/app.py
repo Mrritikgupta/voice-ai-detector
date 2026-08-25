@@ -283,4 +283,4 @@ if __name__ == "__main__":
     print("Warming up model...")
     detector.load_detector()
     print("Ready.")
-    demo.launch()
+    demo.launch(share=True)
