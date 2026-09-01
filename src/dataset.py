@@ -6,14 +6,21 @@ import numpy as np
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import config
+import config_v2 as config
 import audio_utils
 import augment
 
 
+LABEL_TO_BINARY = {
+    config.LABEL_GENUINE_MIC: 0.0,
+    config.LABEL_DIGITAL_SYNTHETIC: 1.0,
+    config.LABEL_PHYSICAL_REPLAY: 1.0,
+}
+
+
 class VoiceDataset(Dataset):
     def __init__(self, csv_path, use_augment=False):
-        self.data = pd.read_csv(csv_path)
+        self.data = pd.read_csv(csv_path, low_memory=False)
         self.use_augment = use_augment
 
     def __len__(self):
@@ -23,7 +30,13 @@ class VoiceDataset(Dataset):
         for _ in range(len(self.data)):
             row = self.data.iloc[idx]
             filepath = row["filepath"]
-            label = row["label"]
+            label_str = row["label"]
+            label = LABEL_TO_BINARY.get(label_str)
+
+            if label is None:
+                print(f"Skipping unknown label '{label_str}' at {filepath}")
+                idx = (idx + 1) % len(self.data)
+                continue
 
             try:
                 audio = audio_utils.load_audio(filepath)

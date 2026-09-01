@@ -5,11 +5,13 @@ import soundfile as sf
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import config
+import config_v2 as config
 
 
-def load_audio(file_path):
-    audio, sr = librosa.load(file_path, sr=config.SAMPLE_RATE, mono=True)
+def load_audio(file_path, sample_rate=None):
+    if sample_rate is None:
+        sample_rate = config.SAMPLE_RATE
+    audio, sr = librosa.load(file_path, sr=sample_rate, mono=True)
     return audio
 
 
@@ -33,9 +35,9 @@ def chunk_audio(audio, chunk_samples=None):
     return chunks
 
 
-def load_and_chunk(file_path):
-    audio = load_audio(file_path)
-    return chunk_audio(audio)
+def load_and_chunk(file_path, sample_rate=None, chunk_samples=None):
+    audio = load_audio(file_path, sample_rate=sample_rate)
+    return chunk_audio(audio, chunk_samples=chunk_samples)
 
 
 def save_audio(audio, file_path, sr=None):
