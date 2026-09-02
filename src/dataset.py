@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config_v2 as config
 import audio_utils
 import augment
+import features
 
 
 LABEL_TO_BINARY = {
@@ -54,7 +55,14 @@ class VoiceDataset(Dataset):
 
                 chunk = chunk.astype(np.float32)
 
-                return torch.tensor(chunk), torch.tensor(label, dtype=torch.float32)
+                spectrogram = features.extract_spectrogram(chunk)
+                spectrogram = spectrogram.astype(np.float32)
+
+                return (
+                    torch.tensor(chunk),
+                    torch.tensor(spectrogram),
+                    torch.tensor(label, dtype=torch.float32),
+                )
 
             except Exception as e:
                 print(f"Skipping corrupt file: {filepath} ({e})")
@@ -64,10 +72,11 @@ class VoiceDataset(Dataset):
 
 
 def collate_fn(batch):
-    audios, labels = zip(*batch)
+    audios, spectrograms, labels = zip(*batch)
     audios = torch.stack(audios)
+    spectrograms = torch.stack(spectrograms)
     labels = torch.stack(labels)
-    return audios, labels
+    return audios, spectrograms, labels
 
 
 if __name__ == "__main__":
