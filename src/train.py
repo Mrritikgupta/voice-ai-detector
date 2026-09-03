@@ -16,6 +16,7 @@ import features
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 SPLITS_DIR = config.DATA_DIR / "splits"
+CHECKPOINT_PATH = config.MODELS_DIR / "checkpoint.pt"
 
 
 def compute_pos_weight(train_csv):
@@ -27,6 +28,29 @@ def compute_pos_weight(train_csv):
     pos_weight = num_real / num_fake
     print(f"Real: {num_real}, Fake: {num_fake}, pos_weight: {pos_weight:.4f}")
     return torch.tensor(pos_weight, dtype=torch.float32)
+
+
+def save_checkpoint(net, optimizer, epoch, best_val_loss):
+    torch.save({
+        "epoch": epoch,
+        "model_state_dict": net.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "best_val_loss": best_val_loss,
+    }, CHECKPOINT_PATH)
+
+
+def load_checkpoint(net, optimizer):
+    if not CHECKPOINT_PATH.exists():
+        return 0, float("inf")
+
+    print(f"Resuming from checkpoint: {CHECKPOINT_PATH}")
+    checkpoint = torch.load(CHECKPOINT_PATH, map_location=device)
+    net.load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    start_epoch = checkpoint["epoch"] + 1
+    best_val_loss = checkpoint["best_val_loss"]
+    print(f"Resumed at epoch {start_epoch}, best_val_loss so far: {best_val_loss:.4f}")
+    return start_epoch, best_val_loss
 
 
 def run_epoch(loader, net, optimizer, criterion, train_mode):
@@ -103,9 +127,9 @@ def main():
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     optimizer = torch.optim.Adam(net.parameters(), lr=config.LEARNING_RATE)
 
-    best_val_loss = float("inf")
+    start_epoch, best_val_loss = load_checkpoint(net, optimizer)
 
-    for epoch in range(config.NUM_EPOCHS):
+    for epoch in range(start_epoch, config.NUM_EPOCHS):
         print(f"\n=== Epoch {epoch+1}/{config.NUM_EPOCHS} ===")
         train_loss, train_acc = run_epoch(train_loader, net, optimizer, criterion, train_mode=True)
         val_loss, val_acc = run_epoch(val_loader, net, optimizer, criterion, train_mode=False)
@@ -118,6 +142,9 @@ def main():
             best_val_loss = val_loss
             model_module.save_model(net)
             print(f"  Saved new best model (val_loss={val_loss:.4f})")
+
+        save_checkpoint(net, optimizer, epoch, best_val_loss)
+        print(f"  Checkpoint saved at epoch {epoch+1}.")
 
     print("Training complete.")
 
