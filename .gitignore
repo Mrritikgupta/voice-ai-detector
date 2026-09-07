@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 .DS_Store
 data/raw/
+data/redteam/
+dummy_test_clip.wav
 data/processed/
 data/raw_downloads/
 data/splits/
