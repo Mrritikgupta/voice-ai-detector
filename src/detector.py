@@ -50,13 +50,23 @@ def score_window(audio_chunk, spectrogram=None):
         spectrogram = features.extract_spectrogram(audio_chunk)
     spec_tensor = torch.tensor(spectrogram).unsqueeze(0).to(device)
 
+    # AASIST branch needs the raw waveform padded/cropped to exactly
+    # nb_samp=64600 samples. is_train=False here — detector.py is always
+    # inference, so we always want the deterministic crop (reproducible
+    # scores for the same input), never the random-crop augmentation.
+    aasist_input = features.prepare_aasist_input(audio_chunk, is_train=False)
+    aasist_tensor = torch.tensor(aasist_input).unsqueeze(0).to(device)
+
     with torch.no_grad():
-        combined_logit, wavlm_logit, spec_logit = net(embedding_tensor, spec_tensor)
+        combined_logit, wavlm_logit, spec_logit, aasist_logit = net(
+            embedding_tensor, spec_tensor, aasist_tensor
+        )
         prob = torch.sigmoid(combined_logit).item()
         wavlm_prob = torch.sigmoid(wavlm_logit).item()
         spec_prob = torch.sigmoid(spec_logit).item()
+        aasist_prob = torch.sigmoid(aasist_logit).item()
 
-    return prob, wavlm_prob, spec_prob
+    return prob, wavlm_prob, spec_prob, aasist_prob
 
 
 def aggregate_scores(window_probs, mode=None):
@@ -107,7 +117,7 @@ def check_audio_file(file_path, aggregation=None):
 
     for chunk, start_sample in zip(windows, start_samples):
         chunk = chunk.astype(np.float32)
-        prob, wavlm_prob, spec_prob = score_window(chunk)
+        prob, wavlm_prob, spec_prob, aasist_prob = score_window(chunk)
 
         start_sec = start_sample / config.SAMPLE_RATE
         end_sec = start_sec + WINDOW_SEC
@@ -118,6 +128,7 @@ def check_audio_file(file_path, aggregation=None):
             "probability_fake": prob,
             "wavlm_probability_fake": wavlm_prob,
             "spectrogram_probability_fake": spec_prob,
+            "aasist_probability_fake": aasist_prob,
             "is_fake": prob > DECISION_THRESHOLD,
         })
         window_probs.append(prob)
@@ -145,7 +156,7 @@ def check_chunk(audio_chunk):
     """For callers that already have a single in-memory 4-sec chunk (e.g.
     live-mic streaming, one chunk at a time). Does NOT do temporal
     windowing - use check_audio_file() for that."""
-    prob, wavlm_prob, spec_prob = score_window(audio_chunk.astype(np.float32))
+    prob, wavlm_prob, spec_prob, aasist_prob = score_window(audio_chunk.astype(np.float32))
     is_fake = prob > DECISION_THRESHOLD
     label = FAKE_LABEL if is_fake else config.LABEL_GENUINE_MIC
 
@@ -154,6 +165,7 @@ def check_chunk(audio_chunk):
         "probability_fake": prob,
         "wavlm_probability_fake": wavlm_prob,
         "spectrogram_probability_fake": spec_prob,
+        "aasist_probability_fake": aasist_prob,
         "is_fake": is_fake,
     }
 

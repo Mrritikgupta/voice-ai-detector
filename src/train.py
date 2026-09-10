@@ -17,6 +17,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 SPLITS_DIR = config.DATA_DIR / "splits"
 CHECKPOINT_PATH = config.MODELS_DIR / "checkpoint.pt"
+AASIST_PRETRAINED_PATH = config.MODELS_DIR / "pretrained" / "AASIST.pth"
 
 
 def compute_pos_weight(train_csv):
@@ -73,10 +74,19 @@ def run_epoch(loader, net, optimizer, criterion, train_mode):
 
             wavlm_embeddings = features.extract_embeddings_batch(audio_np)
 
+            # AASIST branch needs the raw waveform at exactly nb_samp=64600
+            # samples (see features.prepare_aasist_input for why). train_mode
+            # uses AASIST's own random-crop augmentation, eval uses a
+            # deterministic crop so validation scores are reproducible.
+            aasist_input_np = features.prepare_aasist_input_batch(audio_np, is_train=train_mode)
+            aasist_input = torch.from_numpy(aasist_input_np).to(device)
+
             if train_mode:
                 optimizer.zero_grad()
 
-            combined_logit, wavlm_logit, spec_logit = net(wavlm_embeddings, spec_batch)
+            combined_logit, wavlm_logit, spec_logit, aasist_logit = net(
+                wavlm_embeddings, spec_batch, aasist_input
+            )
             combined_logit = combined_logit.squeeze(1)
 
             loss = criterion(combined_logit, labels)
@@ -121,7 +131,19 @@ def main():
         collate_fn=dataset.collate_fn, num_workers=4, persistent_workers=True
     )
 
-    net = model_module.build_model(device, ensemble=True)
+    # Only load AASIST's official pretrained encoder-weights on a genuinely
+    # FRESH training run (no checkpoint yet). If we're resuming, load_checkpoint()
+    # below will overwrite the model with our own fine-tuned weights anyway —
+    # loading the original pretrained-weights here too would be pointless and,
+    # if load_checkpoint somehow didn't fully run, could silently undo fine-tuning.
+    is_fresh_start = not CHECKPOINT_PATH.exists()
+    aasist_path = AASIST_PRETRAINED_PATH if is_fresh_start else None
+    if is_fresh_start:
+        print(f"Fresh training run detected — loading AASIST pretrained encoder from {aasist_path}")
+    else:
+        print("Checkpoint found — resuming, skipping AASIST pretrained-weight load (checkpoint has fine-tuned weights).")
+
+    net = model_module.build_model(device, ensemble=True, aasist_pretrained_path=aasist_path)
 
     pos_weight = compute_pos_weight(train_csv).to(device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)

@@ -35,7 +35,14 @@ def get_predictions(csv_path):
             spec_batch = spec_batch.to(device)
 
             embeddings = features.extract_embeddings_batch(audio_np)
-            combined_logit, _, _ = net(embeddings, spec_batch)
+
+            # AASIST branch needs the raw waveform at exactly nb_samp=64600
+            # samples. is_train=False -> deterministic crop, since evaluation
+            # scores must be reproducible run-to-run (no random-crop here).
+            aasist_input_np = features.prepare_aasist_input_batch(audio_np, is_train=False)
+            aasist_input = torch.from_numpy(aasist_input_np).to(device)
+
+            combined_logit, _, _, _ = net(embeddings, spec_batch, aasist_input)
             combined_logit = combined_logit.squeeze(1)
 
             probs = torch.sigmoid(combined_logit).cpu().numpy()
