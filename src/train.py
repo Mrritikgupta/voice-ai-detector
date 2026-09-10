@@ -18,6 +18,62 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 SPLITS_DIR = config.DATA_DIR / "splits"
 CHECKPOINT_PATH = config.MODELS_DIR / "checkpoint.pt"
 AASIST_PRETRAINED_PATH = config.MODELS_DIR / "pretrained" / "AASIST.pth"
+REDTEAM_MANIFEST_PATH = config.REDTEAM_DIR / "redteam_manifest.csv"
+
+# How many times each hard-example gets repeated in the training set. 3 is a
+# starting point, not a tuned value — tune up if replay-recall still lags
+# after this retrain, tune down if the model starts overfitting to the
+# (smaller, harder) redteam set specifically.
+REDTEAM_OVERSAMPLE_FACTOR = 3
+
+
+def build_train_with_redteam_csv(train_csv):
+    """Builds a fresh training CSV each run that folds the collected
+    hard-examples (data/redteam/redteam_manifest.csv) back into training,
+    oversampled by REDTEAM_OVERSAMPLE_FACTOR. Regenerated every run (not a
+    one-time static file) so it always reflects the current redteam set as
+    it keeps growing across model iterations.
+
+    If no redteam manifest exists yet (e.g. very first training run before
+    build_redteam_set.py has ever been run), just returns the original
+    train_csv unchanged.
+    """
+    train_df = pd.read_csv(train_csv, low_memory=False)[["filepath", "label"]]
+
+    if not REDTEAM_MANIFEST_PATH.exists():
+        print(f"No redteam manifest found at {REDTEAM_MANIFEST_PATH} — training on original train.csv only.")
+        return train_csv
+
+    redteam_df = pd.read_csv(REDTEAM_MANIFEST_PATH, low_memory=False)
+    redteam_df = redteam_df.rename(columns={"true_label": "label"})[["filepath", "label"]]
+
+    # defensive: skip any redteam rows whose audio file no longer exists
+    # (e.g. manually cleaned up, moved, or on a fresh clone without the
+    # redteam .wav files present)
+    exists_mask = redteam_df["filepath"].apply(lambda p: Path(p).exists())
+    missing_count = (~exists_mask).sum()
+    if missing_count > 0:
+        print(f"  Skipping {missing_count} redteam rows whose audio file is missing on disk.")
+    redteam_df = redteam_df[exists_mask]
+
+    print(f"Original train.csv: {len(train_df)} samples")
+    print(f"Redteam hard-examples found: {len(redteam_df)} samples")
+    print(f"Oversampling redteam set x{REDTEAM_OVERSAMPLE_FACTOR}...")
+
+    redteam_oversampled = pd.concat([redteam_df] * REDTEAM_OVERSAMPLE_FACTOR, ignore_index=True)
+
+    combined_df = pd.concat([train_df, redteam_oversampled], ignore_index=True)
+    combined_df = combined_df.sample(frac=1, random_state=config.RANDOM_SEED).reset_index(drop=True)
+
+    redteam_pct = 100 * len(redteam_oversampled) / len(combined_df)
+    print(f"Combined training set: {len(combined_df)} samples "
+          f"({len(redteam_oversampled)} redteam-derived, {redteam_pct:.1f}% of total)")
+
+    output_path = SPLITS_DIR / "train_with_redteam.csv"
+    combined_df.to_csv(output_path, index=False)
+    print(f"Saved combined training CSV: {output_path}")
+
+    return output_path
 
 
 def compute_pos_weight(train_csv):
@@ -119,7 +175,10 @@ def main():
     train_csv = SPLITS_DIR / "train.csv"
     val_csv = SPLITS_DIR / "val.csv"
 
-    train_ds = dataset.VoiceDataset(train_csv, use_augment=True)
+    # Fold hard-examples (redteam set) back into training, oversampled.
+    train_csv_for_training = build_train_with_redteam_csv(train_csv)
+
+    train_ds = dataset.VoiceDataset(train_csv_for_training, use_augment=True)
     val_ds = dataset.VoiceDataset(val_csv, use_augment=False)
 
     train_loader = DataLoader(
@@ -145,7 +204,11 @@ def main():
 
     net = model_module.build_model(device, ensemble=True, aasist_pretrained_path=aasist_path)
 
-    pos_weight = compute_pos_weight(train_csv).to(device)
+    # pos_weight computed from the ACTUAL training distribution (including
+    # oversampled redteam rows), not the original train.csv — otherwise the
+    # loss's real:fake balance would be miscalibrated relative to what the
+    # model actually sees each epoch.
+    pos_weight = compute_pos_weight(train_csv_for_training).to(device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     optimizer = torch.optim.Adam(net.parameters(), lr=config.LEARNING_RATE)
 
